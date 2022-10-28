@@ -170,3 +170,56 @@ resource "aws_iam_role_policy_attachment" "spectrum_policy_attachments" {
 //endregion
 
 //endregion
+
+//region ETL
+
+resource "aws_redshiftdata_statement" "create_external_schema_from_kinesis" {
+  cluster_identifier = aws_redshift_cluster.redshift_main.cluster_identifier
+  database = aws_redshift_cluster.redshift_main.database_name
+  db_user = var.rs_master_user
+  sql = <<EOT
+    CREATE EXTERNAL SCHEMA IF NOT EXISTS ext_kinesis_main FROM KINESIS
+    IAM_ROLE '${aws_iam_role.spectrum_role.arn}';
+  EOT
+}
+
+resource "aws_redshiftdata_statement" "drop_materialized_view_from_kinesis_stream1" {
+  depends_on = [aws_redshiftdata_statement.create_external_schema_from_kinesis]
+  cluster_identifier = aws_redshift_cluster.redshift_main.cluster_identifier
+  database = aws_redshift_cluster.redshift_main.database_name
+  db_user = var.rs_master_user
+  sql = <<EOT
+    DROP MATERIALIZED VIEW IF EXISTS mv_test_kinesis_source;
+  EOT
+}
+
+resource "aws_redshiftdata_statement" "create_materialized_view_from_kinesis_stream1" {
+  depends_on = [aws_redshiftdata_statement.drop_materialized_view_from_kinesis_stream1]
+  cluster_identifier = aws_redshift_cluster.redshift_main.cluster_identifier
+  database = aws_redshift_cluster.redshift_main.database_name
+  db_user = var.rs_master_user
+  sql = <<EOT
+    CREATE MATERIALIZED VIEW mv_test_kinesis_source DISTKEY(5) sortkey(1) AS
+    SELECT
+      approximate_arrival_timestamp,
+      partition_key,
+      shard_id,
+      sequence_number,
+      refresh_time,
+      json_parse(from_varbyte(kinesis_data, 'utf-8')) as payload,
+      kinesis_data as _raw_data
+    FROM ext_kinesis_main."${aws_kinesis_stream.kinesis_main.name}";
+  EOT
+}
+
+resource "aws_redshiftdata_statement" "init_materialized_view_from_kinesis_stream1" {
+  depends_on = [aws_redshiftdata_statement.create_materialized_view_from_kinesis_stream1]
+  cluster_identifier = aws_redshift_cluster.redshift_main.cluster_identifier
+  database = aws_redshift_cluster.redshift_main.database_name
+  db_user = var.rs_master_user
+  sql = <<EOT
+    REFRESH MATERIALIZED VIEW mv_test_kinesis_source;
+  EOT
+}
+
+//endregion
